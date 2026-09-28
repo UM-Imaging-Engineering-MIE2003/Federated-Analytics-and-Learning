@@ -1,0 +1,3 @@
+# Confidential output files (descriptive statistics results) - never expose to AI assistants
+*.csv
+*.xlsx

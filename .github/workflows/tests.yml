@@ -1,0 +1,74 @@
+# Maintainer tests: make sure that the course materials keep working over time.
+# These tests are not part of the course; students do not need them. See tests/README.md.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  standard:
+    name: Standard tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install the course and test packages
+        run: pip install -r requirements.txt -r tests/requirements.txt
+      - name: Run the tests
+        run: pytest
+
+  algorithm:
+    name: Algorithm tests (mock client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      # Separate environment: the algorithm pins an older vantage6-algorithm-tools version
+      - name: Install the algorithm and test packages
+        run: pip install -r tests/requirements-algorithm.txt
+      - name: Run the tests
+        run: pytest -m algorithm tests/test_algorithm.py
+
+  developer-network:
+    name: End-to-end test (developer network)
+    runs-on: ubuntu-latest
+    needs: [standard, algorithm]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install the course and test packages
+        run: pip install -r requirements.txt -r tests/requirements.txt
+      - name: Start the developer network
+        run: python dev_network.py start
+      - name: Run the notebook against the developer network
+        run: pytest -m devnetwork
+      - name: Show the logs of the vantage6 containers
+        if: failure()
+        run: |
+          for container in $(docker ps -a --filter "name=vantage6" --format "{{.Names}}"); do
+            echo "::group::$container"
+            docker logs --tail 200 "$container"
+            echo "::endgroup::"
+          done
+      - name: Stop and remove the developer network
+        if: always()
+        run: |
+          python dev_network.py stop || true
+          python dev_network.py remove || true

@@ -1,0 +1,24 @@
+# Tested with Python 3.10
+
+# Core dependencies
+# 'vantage6' provides the command line tool (v6) to run the developer network
+# and includes the Python client (vantage6-client) used in the notebook.
+vantage6==4.15.1
+vantage6-client==4.15.1
+
+# Jupyter notebook
+notebook>=7.0.0
+ipykernel>=6.0.0
+
+# Data processing and analysis
+pandas>=2.0.0
+
+# Visualisation
+matplotlib>=3.7.0
+seaborn>=0.13.0
+
+# HTTP requests to check whether the server is running
+requests>=2.28.0
+
+# Security fix: upgrade setuptools to resolve CVE-2026-59890
+setuptools>=84.0.0
