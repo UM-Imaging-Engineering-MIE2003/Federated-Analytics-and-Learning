@@ -49,14 +49,24 @@ MINIMUM_RECORDS_PER_NODE = 250
 
 def get_environment() -> dict:
     """
-    Make sure the 'v6' command of this Python environment is used.
+    Make sure the 'v6' command of this Python environment is used, and that it can find Docker.
 
     'v6 dev start-demo-network' calls 'v6' again by itself, so the folder that
     contains 'v6' must be on the PATH, also when the environment is not activated.
+
+    The 'docker' command finds Docker through the current Docker context, but 'v6' does not: it
+    only looks at /var/run/docker.sock. On macOS, Docker Desktop (and also Colima and OrbStack)
+    uses another file, for example ~/.docker/run/docker.sock, so 'v6' says that it cannot reach
+    the Docker engine. Setting DOCKER_HOST tells 'v6' to use the same Docker as the 'docker' command.
     """
     environment = os.environ.copy()
     scripts_folder = str(Path(sys.executable).parent)
     environment["PATH"] = scripts_folder + os.pathsep + environment.get("PATH", "")
+    if "DOCKER_HOST" not in environment:
+        context = subprocess.run(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+                                 capture_output=True, text=True)
+        if context.returncode == 0 and context.stdout.strip():
+            environment["DOCKER_HOST"] = context.stdout.strip()
     return environment
 
 
@@ -64,11 +74,12 @@ def run_v6(arguments: list[str]) -> None:
     """Run a 'v6' command and stop the script when it fails."""
     command = ["v6"] + arguments
     print(f"\n>>> {' '.join(command)}\n")
-    executable = shutil.which("v6", path=get_environment()["PATH"])
+    environment = get_environment()
+    executable = shutil.which("v6", path=environment["PATH"])
     if executable is None:
         sys.exit("Could not find the 'v6' command. "
                  "Did you install the requirements with 'pip install -r requirements.txt'?")
-    result = subprocess.run([executable] + arguments, env=get_environment())
+    result = subprocess.run([executable] + arguments, env=environment)
     if result.returncode != 0:
         sys.exit(f"The command '{' '.join(command)}' did not finish correctly. "
                  f"Please read the messages above.")
