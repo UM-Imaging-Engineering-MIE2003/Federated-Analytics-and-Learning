@@ -62,7 +62,7 @@ def get_environment() -> dict:
     environment = os.environ.copy()
     scripts_folder = str(Path(sys.executable).parent)
     environment["PATH"] = scripts_folder + os.pathsep + environment.get("PATH", "")
-    if "DOCKER_HOST" not in environment:
+    if "DOCKER_HOST" not in environment and shutil.which("docker"):
         context = subprocess.run(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
                                  capture_output=True, text=True)
         if context.returncode == 0 and context.stdout.strip():
@@ -172,17 +172,23 @@ def network_exists() -> bool:
     return ServerContext.config_exists(NETWORK_NAME, system_folders=False)
 
 
-def start() -> None:
-    check_docker()
-    remove_locked_node_logs()
-    if not network_exists():
-        arguments = ["dev", "create-demo-network",
-                     "--name", NETWORK_NAME,
-                     "--num-nodes", str(NUMBER_OF_NODES),
-                     "--server-port", str(SERVER_PORT),
-                     "--server-url", get_server_url(),
-                     "--image", IMAGES["server"],
-                     "--ui-image", IMAGES["ui"]]
+def create() -> None:
+    """
+    Create the developer network, and remove it again when this does not finish.
+
+    'v6 dev create-demo-network' first writes the configuration files and after that fills the
+    server with the users, organisations and nodes. When it stops in between, the next 'start'
+    finds the configuration files, skips creating the network and starts a server without users,
+    so logging in fails. Removing the half-created network makes the next 'start' begin again.
+    """
+    arguments = ["dev", "create-demo-network",
+                 "--name", NETWORK_NAME,
+                 "--num-nodes", str(NUMBER_OF_NODES),
+                 "--server-port", str(SERVER_PORT),
+                 "--server-url", get_server_url(),
+                 "--image", IMAGES["server"],
+                 "--ui-image", IMAGES["ui"]]
+    try:
         with tempfile.TemporaryDirectory() as shuffled_folder:
             # Add any CSV files from the synthetic data folder; every file is split over the nodes,
             # with the hospitals in a random order
@@ -191,6 +197,18 @@ def start() -> None:
                 shuffled_file = shuffle_hospitals(csv_file, Path(shuffled_folder))
                 arguments += ["--add-dataset", csv_file.stem, str(shuffled_file)]
             run_v6(arguments)
+    except (SystemExit, KeyboardInterrupt):
+        if network_exists():
+            print("\nCreating the network did not finish; removing the parts that were created.")
+            remove()
+        raise
+
+
+def start() -> None:
+    check_docker()
+    remove_locked_node_logs()
+    if not network_exists():
+        create()
     run_v6(["dev", "start-demo-network", "--name", NETWORK_NAME,
             "--server-image", IMAGES["server"],
             "--node-image", IMAGES["node"],
@@ -213,6 +231,8 @@ def remove() -> None:
         print("There is no developer network to remove.")
         return
     remove_locked_node_logs()
+    # 'v6 dev remove-demo-network' does nothing while the server is running, so stop it first
+    run_v6(["dev", "stop-demo-network", "--name", NETWORK_NAME])
     run_v6(["dev", "remove-demo-network", "--name", NETWORK_NAME])
 
 

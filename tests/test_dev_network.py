@@ -29,6 +29,31 @@ def test_environment_uses_the_v6_of_this_python():
     assert path.split(dev_network.os.pathsep)[0] == str(Path(sys.executable).parent)
 
 
+@pytest.mark.parametrize("docker_host", [
+    "unix:///var/run/docker.sock",                    # Docker Engine on Linux
+    "unix:///Users/student/.docker/run/docker.sock",  # Docker Desktop on macOS
+    "npipe:////./pipe/dockerDesktopLinuxEngine",      # Docker Desktop on Windows
+])
+def test_environment_uses_the_docker_of_the_current_context(monkeypatch, docker_host):
+    """'v6' does not know Docker contexts, so it must be told which Docker the 'docker' command uses."""
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setattr(dev_network.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(dev_network.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, stdout=docker_host + "\n"))
+    assert dev_network.get_environment()["DOCKER_HOST"] == docker_host
+
+
+def test_environment_keeps_your_own_docker_host(monkeypatch):
+    monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+    assert dev_network.get_environment()["DOCKER_HOST"] == "tcp://127.0.0.1:2375"
+
+
+def test_environment_without_docker(monkeypatch):
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setattr(dev_network.shutil, "which", lambda name: None)
+    assert "DOCKER_HOST" not in dev_network.get_environment()
+
+
 @pytest.mark.parametrize("system, context, expected_url", [
     ("Windows", "", "http://host.docker.internal"),
     ("Darwin", "", "http://host.docker.internal"),
@@ -74,6 +99,39 @@ def test_start_only_starts_an_existing_network(monkeypatch, v6_commands):
     assert v6_commands == [START_COMMAND]
 
 
+@pytest.mark.parametrize("stop_creating", [SystemExit("failed"), KeyboardInterrupt()])
+def test_half_created_network_is_removed(monkeypatch, v6_commands, stop_creating):
+    """Otherwise the next start skips creating the network and uses a server without users."""
+    def run_v6(arguments):
+        v6_commands.append(arguments)
+        if arguments[1] == "create-demo-network":
+            monkeypatch.setattr(dev_network, "network_exists", lambda: True)
+            raise stop_creating
+    monkeypatch.setattr(dev_network, "run_v6", run_v6)
+    monkeypatch.setattr(dev_network, "network_exists", lambda: False)
+    monkeypatch.setattr(dev_network, "get_server_url", lambda: "http://172.17.0.1")
+
+    with pytest.raises(type(stop_creating)):
+        dev_network.start()
+
+    assert [command[1] for command in v6_commands] == [
+        "create-demo-network", "stop-demo-network", "remove-demo-network"]
+
+
+def test_failed_creation_without_files_removes_nothing(monkeypatch, v6_commands):
+    def run_v6(arguments):
+        v6_commands.append(arguments)
+        raise SystemExit("failed")
+    monkeypatch.setattr(dev_network, "run_v6", run_v6)
+    monkeypatch.setattr(dev_network, "network_exists", lambda: False)
+    monkeypatch.setattr(dev_network, "get_server_url", lambda: "http://172.17.0.1")
+
+    with pytest.raises(SystemExit):
+        dev_network.start()
+
+    assert [command[1] for command in v6_commands] == ["create-demo-network"]
+
+
 def test_images_use_the_same_version_as_the_requirements():
     requirements = (dev_network.Path(dev_network.__file__).parent / "requirements.txt").read_text()
     assert f"vantage6=={dev_network.VANTAGE6_VERSION}" in requirements
@@ -86,9 +144,11 @@ def test_stop(v6_commands):
 
 
 def test_remove(monkeypatch, v6_commands):
+    """'v6 dev remove-demo-network' does nothing while the server runs, so the network is stopped first."""
     monkeypatch.setattr(dev_network, "network_exists", lambda: True)
     dev_network.remove()
-    assert v6_commands == [["dev", "remove-demo-network", "--name", dev_network.NETWORK_NAME]]
+    assert v6_commands == [["dev", "stop-demo-network", "--name", dev_network.NETWORK_NAME],
+                           ["dev", "remove-demo-network", "--name", dev_network.NETWORK_NAME]]
 
 
 def test_remove_without_network(monkeypatch, v6_commands, capsys):
