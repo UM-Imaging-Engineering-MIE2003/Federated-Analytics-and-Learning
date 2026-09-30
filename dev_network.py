@@ -16,7 +16,8 @@ created for the first time. Each file contains one block of rows per hospital; t
 put in a random order first, so that every network gives the hospitals to different nodes.
 If you add or change a file later, remove the network and start it again.
 
-Docker must be installed and running before you start the network.
+Docker must be installed and running before you start the network, and this script must be run
+with Python 3.10 (the version that vantage6 4.15.1 works with).
 """
 import argparse
 import os
@@ -39,6 +40,11 @@ SERVER_PORT = 7601
 VANTAGE6_VERSION = "4.15.1"
 IMAGES = {name: f"ghcr.io/vantage6/infrastructure/{name}:{VANTAGE6_VERSION}"
           for name in ["server", "node", "algorithm-store", "ui"]}
+
+# This version of vantage6 only works with Python 3.10. With a newer Python, the 'v6' command
+# gives the server container a wrong name (such as 'vantage6-fal_demo-user-ServerType.V6SERVER'),
+# so it cannot find or stop the server any more
+PYTHON_VERSION = (3, 10)
 
 # Folder with extra CSV files that are added to the nodes (optional)
 SYNTHETIC_DATA_FOLDER = Path(__file__).parent / "synthetic_datasets"
@@ -83,6 +89,15 @@ def run_v6(arguments: list[str]) -> None:
     if result.returncode != 0:
         sys.exit(f"The command '{' '.join(command)}' did not finish correctly. "
                  f"Please read the messages above.")
+
+
+def check_python() -> None:
+    """Check that this Python has the version that vantage6 works with."""
+    if sys.version_info[:2] != PYTHON_VERSION:
+        sys.exit(f"You are using Python {platform.python_version()}, but vantage6 {VANTAGE6_VERSION} "
+                 f"only works with Python 3.10.\n"
+                 f"Create a new environment with Python 3.10 and install the requirements again "
+                 f"(see step 2 of README.md). Then run 'python dev_network.py remove' and start again.")
 
 
 def check_docker() -> None:
@@ -166,6 +181,27 @@ def shuffle_hospitals(csv_file: Path, output_folder: Path) -> Path:
     return shuffled_file
 
 
+def remove_leftover_containers() -> list[str]:
+    """
+    Remove the Docker containers of the network that 'v6' has lost track of.
+
+    When the network was started with a Python version newer than 3.10, 'v6' cannot find the
+    server container, so it does not stop it. The container keeps its name and port, and every
+    new start of the network fails.
+
+    Returns:
+        The names of the removed containers
+    """
+    names = subprocess.run(["docker", "ps", "--all", "--format", "{{.Names}}"],
+                           capture_output=True, text=True).stdout.split()
+    leftovers = [name for name in names
+                 if name.startswith((f"vantage6-{NETWORK_NAME}-", f"vantage6-{NETWORK_NAME}_"))]
+    if leftovers:
+        print(f"Removing containers that were left behind: {', '.join(leftovers)}")
+        subprocess.run(["docker", "rm", "--force"] + leftovers, capture_output=True)
+    return leftovers
+
+
 def network_exists() -> bool:
     """Check whether the developer network has already been created."""
     from vantage6.cli.context.server import ServerContext
@@ -228,11 +264,14 @@ def stop() -> None:
 def remove() -> None:
     check_docker()
     if not network_exists():
-        print("There is no developer network to remove.")
+        # The configuration may be gone while containers are still left behind
+        if not remove_leftover_containers():
+            print("There is no developer network to remove.")
         return
     remove_locked_node_logs()
     # 'v6 dev remove-demo-network' does nothing while the server is running, so stop it first
     run_v6(["dev", "stop-demo-network", "--name", NETWORK_NAME])
+    remove_leftover_containers()
     run_v6(["dev", "remove-demo-network", "--name", NETWORK_NAME])
 
 
@@ -241,4 +280,6 @@ if __name__ == "__main__":
     parser.add_argument("action", choices=["start", "stop", "remove"],
                         help="start, stop or remove the developer network")
     actions = {"start": start, "stop": stop, "remove": remove}
-    actions[parser.parse_args().action]()
+    action = actions[parser.parse_args().action]
+    check_python()
+    action()

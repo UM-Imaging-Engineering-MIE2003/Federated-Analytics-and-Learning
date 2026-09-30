@@ -1,4 +1,5 @@
-# Tested with Python 3.10
+# Needs Python 3.10: with newer versions, the 'v6' command of vantage6 4.15.1 gives its Docker
+# containers wrong names, so the developer network cannot be started or stopped properly
 
 # Core dependencies
 # 'vantage6' provides the command line tool (v6) to run the developer network

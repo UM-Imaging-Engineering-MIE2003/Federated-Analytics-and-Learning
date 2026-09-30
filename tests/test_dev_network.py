@@ -21,6 +21,7 @@ def v6_commands(monkeypatch):
     monkeypatch.setattr(dev_network, "run_v6", commands.append)
     monkeypatch.setattr(dev_network, "check_docker", lambda: None)
     monkeypatch.setattr(dev_network, "remove_locked_node_logs", lambda: None)
+    monkeypatch.setattr(dev_network, "remove_leftover_containers", lambda: [])
     return commands
 
 
@@ -156,6 +157,44 @@ def test_remove_without_network(monkeypatch, v6_commands, capsys):
     dev_network.remove()
     assert v6_commands == []
     assert "no developer network" in capsys.readouterr().out
+
+
+def test_remove_leftover_containers(monkeypatch):
+    """Only containers of this network are removed, also the ones that 'v6' named wrongly."""
+    names = ["vantage6-fal_demo-user-ServerType.V6SERVER", "vantage6-fal_demo-user-ui",
+             "vantage6-fal_demo_node_1-user", "vantage6-fal_demo_store-user-algorithm-store",
+             "vantage6-fal_demo2-user-server", "vantage6-other-user-server", "flyover"]
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="\n".join(names) + "\n")
+    monkeypatch.setattr(dev_network.subprocess, "run", run)
+
+    removed = dev_network.remove_leftover_containers()
+
+    assert removed == names[:4]
+    assert commands[-1] == ["docker", "rm", "--force"] + names[:4]
+
+
+def test_remove_leftover_containers_when_there_are_none(monkeypatch):
+    commands = []
+    monkeypatch.setattr(dev_network.subprocess, "run", lambda command, **kwargs: (
+        commands.append(command) or SimpleNamespace(returncode=0, stdout="flyover\n")))
+    assert dev_network.remove_leftover_containers() == []
+    assert len(commands) == 1
+
+
+@pytest.mark.parametrize("version, allowed", [((3, 10, 21), True), ((3, 11, 0), False), ((3, 14, 4), False)])
+def test_python_version(monkeypatch, version, allowed):
+    monkeypatch.setattr(dev_network.sys, "version_info", version)
+    monkeypatch.setattr(dev_network.platform, "python_version", lambda: ".".join(map(str, version)))
+    if allowed:
+        dev_network.check_python()
+    else:
+        with pytest.raises(SystemExit, match="only works with Python 3.10"):
+            dev_network.check_python()
+
 
 
 def test_warning_for_small_data_sets(tmp_path, capsys):
